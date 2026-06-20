@@ -37,10 +37,10 @@ npm install
 # 2. Variables de entorno
 cp .env.example .env        # completar credenciales de Supabase
 
-# 3. Base de datos: generar cliente + aplicar migraciones + RLS
+# 3. Base de datos: generar cliente + migraciones + RLS + Auth Hook
 npm run db:generate
-npm run db:migrate          # crea las tablas (usa DIRECT_URL)
-npm run db:rls --workspace=@menubit/api   # aplica políticas RLS
+npm run db:setup --workspace=@menubit/api   # migrate deploy + RLS (usa DIRECT_URL)
+npm run db:hook  --workspace=@menubit/api   # crea el Custom Access Token Hook
 
 # 4. Levantar todo (api + web) en paralelo
 npm run dev
@@ -51,12 +51,17 @@ npm run dev
 
 ### Configuración de Supabase (una vez)
 
+Guía detallada paso a paso: **[`docs/SUPABASE_SETUP.md`](./docs/SUPABASE_SETUP.md)**.
+
+Resumen:
+
 1. Crear proyecto en Supabase; copiar `URL`, `anon key`, `service_role key` y
-   `JWT secret` al `.env`.
-2. Ejecutar `apps/api/prisma/supabase-auth-hook.sql` y activar el hook
-   **Custom Access Token** en Authentication → Hooks. Esto promueve
-   `tenant_id`, `role` y `modules` al JWT (lo consumen los guards y RLS).
-3. Tras migrar, aplicar RLS: `npm run db:rls --workspace=@menubit/api`.
+   `JWT secret` al `.env`. `DATABASE_URL` = pooler (6543 + `pgbouncer=true`),
+   `DIRECT_URL` = directa (5432, la usan las migraciones).
+2. `npm run db:setup` (tablas + RLS) y `npm run db:hook` (función del hook).
+3. Activar el hook **Custom Access Token** en Authentication → Hooks
+   (`public.custom_access_token_hook`). Promueve `tenant_id/role/modules` al JWT
+   (lo consumen los guards y RLS).
 
 ## Multi-tenancy (cómo funciona)
 

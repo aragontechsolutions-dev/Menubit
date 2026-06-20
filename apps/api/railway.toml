@@ -3,7 +3,10 @@ builder = "nixpacks"
 buildCommand = "npx prisma generate && npm run build"
 
 [deploy]
-startCommand = "npx prisma migrate deploy && node dist/main"
+# migrate deploy aplica las migraciones; db:rls reaplica las políticas RLS
+# (idempotente). El Auth Hook se aplica una sola vez (npm run db:hook) y se
+# habilita manualmente en el dashboard de Supabase.
+startCommand = "npx prisma migrate deploy && npm run db:rls && node dist/main"
 healthcheckPath = "/health"
 healthcheckTimeout = 30
 restartPolicyType = "on_failure"

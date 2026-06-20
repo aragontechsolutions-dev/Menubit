@@ -15,7 +15,9 @@
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
     "db:studio": "prisma studio",
-    "db:rls": "node prisma/apply-rls.mjs"
+    "db:rls": "node prisma/run-sql.mjs rls.sql",
+    "db:hook": "node prisma/run-sql.mjs supabase-auth-hook.sql",
+    "db:setup": "prisma migrate deploy && npm run db:rls"
   },
   "dependencies": {
     "@menubit/shared": "*",
