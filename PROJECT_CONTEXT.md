@@ -98,3 +98,225 @@ Sem 3: CRUD de productos + categorías
 - **UY:** DGI — CFE (e-Ticket obligatorio). Integración vía Uruware o API DGI.
 - **ES:** VeriFactu (2025) / TicketBAI (País Vasco/Navarra). Pagos: Stripe/Redsys.
 - **USA:** sin obligación federal, tax por estado. Pagos: Stripe.
+
+## 11. Estructura del monorepo (Fase 0)
+
+```
+menubit/
+├── apps/
+│   ├── api/                      # NestJS + Prisma 5
+│   │   ├── prisma/
+│   │   │   └── schema.prisma
+│   │   ├── src/
+│   │   │   ├── main.ts           # CORS + Swagger en /api/docs
+│   │   │   ├── app.module.ts
+│   │   │   ├── config/
+│   │   │   │   └── configuration.ts
+│   │   │   ├── prisma/
+│   │   │   │   ├── prisma.module.ts
+│   │   │   │   └── prisma.service.ts
+│   │   │   ├── common/
+│   │   │   │   ├── guards/        # jwt-auth, tenant, roles
+│   │   │   │   ├── decorators/    # @CurrentTenant, @CurrentUser, @Roles
+│   │   │   │   ├── interceptors/  # tenant-context
+│   │   │   │   └── middleware/    # tenant.middleware
+│   │   │   └── modules/
+│   │   │       ├── auth/          # POST /auth/verify, GET /auth/me
+│   │   │       ├── tenants/       # POST /tenants, GET /tenants/me
+│   │   │       ├── users/
+│   │   │       └── health/        # GET /health (Railway healthcheck)
+│   │   └── railway.toml
+│   └── web/                      # React + Vite + Tailwind
+│       ├── src/
+│       │   ├── main.tsx
+│       │   ├── App.tsx           # router
+│       │   ├── lib/              # supabase.ts, axios.ts, queryClient.ts
+│       │   ├── stores/           # auth.store.ts (Zustand)
+│       │   ├── hooks/            # useAuth, useTenant
+│       │   ├── pages/
+│       │   │   ├── auth/         # LoginPage, RegisterPage
+│       │   │   ├── onboarding/   # OnboardingPage (crea tenant)
+│       │   │   └── dashboard/    # DashboardPage
+│       │   ├── components/
+│       │   │   ├── ui/           # Button, Input, Card, Spinner
+│       │   │   └── layout/       # AppShell, Sidebar, ProtectedRoute
+│       │   └── types/
+│       └── vercel.json
+├── packages/
+│   └── shared/                  # Zod schemas + tipos compartidos api<->web
+│       └── src/
+│           ├── schemas/         # tenant.schema.ts, user.schema.ts
+│           └── types/           # tenant, user, common
+├── turbo.json
+├── package.json                 # workspaces
+└── .env.example
+```
+
+### Notas de implementación clave (Fase 0)
+- **jwt-auth.guard:** valida el JWT de Supabase con `SUPABASE_JWT_SECRET`. El JWT
+  trae `sub`, `email` y custom claims `tenant_id`, `role`, `modules[]`.
+- **tenant.guard:** lee `tenant_id` del JWT, confirma tenant activo en BD, lo
+  adjunta al request.
+- **roles.guard:** valida rol del usuario contra el decorador `@Roles()`.
+- **auth.service:** en primer login, crea el usuario en BD si no existe y devuelve
+  su tenant.
+- **axios.ts (web):** interceptor que adjunta `Authorization: Bearer <token>` y
+  `x-tenant-id` en cada request.
+- **ProtectedRoute:** sin sesión → /login; sesión sin tenant → /onboarding.
+- Env vars en NestJS SIEMPRE vía ConfigService (nunca process.env directo, salvo
+  configuration.ts).
+
+## 12. Prisma schema base (Fase 0)
+
+```prisma
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum TenantStatus { TRIAL ACTIVE SUSPENDED CANCELLED }
+enum PlanType     { STARTER BASIC PRO ENTERPRISE }
+enum UserRole     { OWNER MANAGER CASHIER KITCHEN WAITER }
+enum ModuleKey {
+  POS TABLES KITCHEN_DISPLAY DELIVERY INVENTORY RESERVATIONS
+  DIGITAL_MENU LOYALTY REPORTS_ADVANCED ELECTRONIC_INVOICE
+  MULTI_BRANCH HR_BASIC
+}
+
+model Tenant {
+  id               String       @id @default(cuid())
+  name             String
+  slug             String       @unique
+  status           TenantStatus @default(TRIAL)
+  plan             PlanType     @default(STARTER)
+  trialEndsAt      DateTime?
+  stripeCustomerId String?      @unique
+  stripeSubId      String?      @unique
+  settings         Json         @default("{}")
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  users    TenantUser[]
+  branches Branch[]
+  modules  TenantModule[]
+
+  @@map("tenants")
+}
+
+model TenantUser {
+  id         String   @id @default(cuid())
+  tenantId   String
+  supabaseId String   @unique
+  email      String
+  name       String
+  role       UserRole @default(WAITER)
+  pin        String?  // PIN de 4 dígitos para acceso rápido de turno
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([supabaseId])
+  @@map("tenant_users")
+}
+
+model Branch {
+  id        String   @id @default(cuid())
+  tenantId  String
+  name      String
+  address   String?
+  phone     String?
+  timezone  String   @default("America/Montevideo")
+  settings  Json     @default("{}")
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@map("branches")
+}
+
+model TenantModule {
+  id        String    @id @default(cuid())
+  tenantId  String
+  moduleKey ModuleKey
+  isActive  Boolean   @default(true)
+  config    Json      @default("{}")
+  enabledAt DateTime  @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, moduleKey])
+  @@index([tenantId])
+  @@map("tenant_modules")
+}
+```
+
+## 13. Variables de entorno (.env.example)
+
+```
+# Database (Supabase) — usar pooler para DATABASE_URL, directa para migraciones
+DATABASE_URL="postgresql://postgres:[PASSWORD]@db.[PROJECT].supabase.co:5432/postgres?pgbouncer=true"
+DIRECT_URL="postgresql://postgres:[PASSWORD]@db.[PROJECT].supabase.co:5432/postgres"
+
+# Supabase
+SUPABASE_URL="https://[PROJECT].supabase.co"
+SUPABASE_ANON_KEY="your-anon-key"
+SUPABASE_JWT_SECRET="your-jwt-secret"
+SUPABASE_SERVICE_ROLE_KEY="your-service-role-key"
+
+# App (api)
+PORT=3001
+NODE_ENV=development
+FRONTEND_URL="http://localhost:5173"
+
+# Web (prefijo VITE_)
+VITE_API_URL="http://localhost:3001"
+VITE_SUPABASE_URL="https://[PROJECT].supabase.co"
+VITE_SUPABASE_ANON_KEY="your-anon-key"
+```
+
+## 14. Deploy configs
+
+**apps/api/railway.toml**
+```toml
+[build]
+builder = "nixpacks"
+buildCommand = "npx prisma generate && npm run build"
+
+[deploy]
+startCommand = "npx prisma migrate deploy && node dist/main"
+healthcheckPath = "/health"
+healthcheckTimeout = 30
+restartPolicyType = "on_failure"
+```
+
+**apps/web/vercel.json**
+```json
+{ "rewrites": [{ "source": "/(.*)", "destination": "/" }] }
+```
+
+## 15. Orden de construcción Fase 0 (checklist)
+- [ ] Monorepo: turbo.json + package.json workspaces + .gitignore + .env.example
+- [ ] packages/shared: Zod schemas + tipos (tenant, user, common)
+- [ ] apps/api: NestJS base + ConfigService + PrismaModule/Service
+- [ ] Prisma schema (sección 12) + `prisma generate` + primera migración
+- [ ] Guards: jwt-auth → tenant → roles + decoradores
+- [ ] Módulos: health → auth → tenants → users
+- [ ] Swagger en /api/docs + CORS al FRONTEND_URL
+- [ ] apps/web: Vite + Tailwind + shadcn/ui + router
+- [ ] lib: supabase, axios (interceptor auth + x-tenant-id), queryClient
+- [ ] auth.store (Zustand) + ProtectedRoute + AppShell/Sidebar
+- [ ] Pages: Login → Onboarding (crea tenant) → Dashboard
+- [ ] README + deploy configs (railway.toml, vercel.json)
+- [ ] Deploy: web→Vercel, api→Railway, verificar /health y login end-to-end
+```
