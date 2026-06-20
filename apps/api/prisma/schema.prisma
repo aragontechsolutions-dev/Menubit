@@ -1,0 +1,124 @@
+// Menubit — Prisma schema base (Fase 0)
+// Modelos núcleo de multi-tenancy: Tenant, TenantUser, Branch, TenantModule.
+// La aislación entre tenants se refuerza además con RLS en Postgres (ver
+// prisma/rls.sql). Prisma usa una conexión privilegiada; RLS protege el acceso
+// directo vía la API REST/PostgREST de Supabase con el JWT del cliente.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum TenantStatus {
+  TRIAL
+  ACTIVE
+  SUSPENDED
+  CANCELLED
+}
+
+enum PlanType {
+  STARTER
+  BASIC
+  PRO
+  ENTERPRISE
+}
+
+enum UserRole {
+  OWNER
+  MANAGER
+  CASHIER
+  KITCHEN
+  WAITER
+}
+
+enum ModuleKey {
+  POS
+  TABLES
+  KITCHEN_DISPLAY
+  DELIVERY
+  INVENTORY
+  RESERVATIONS
+  DIGITAL_MENU
+  LOYALTY
+  REPORTS_ADVANCED
+  ELECTRONIC_INVOICE
+  MULTI_BRANCH
+  HR_BASIC
+}
+
+model Tenant {
+  id               String       @id @default(cuid())
+  name             String
+  slug             String       @unique
+  status           TenantStatus @default(TRIAL)
+  plan             PlanType     @default(STARTER)
+  trialEndsAt      DateTime?
+  stripeCustomerId String?      @unique
+  stripeSubId      String?      @unique
+  settings         Json         @default("{}")
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  users    TenantUser[]
+  branches Branch[]
+  modules  TenantModule[]
+
+  @@map("tenants")
+}
+
+model TenantUser {
+  id         String   @id @default(cuid())
+  tenantId   String
+  supabaseId String   @unique
+  email      String
+  name       String
+  role       UserRole @default(WAITER)
+  pin        String? // PIN de 4 dígitos para acceso rápido de turno
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([supabaseId])
+  @@map("tenant_users")
+}
+
+model Branch {
+  id        String   @id @default(cuid())
+  tenantId  String
+  name      String
+  address   String?
+  phone     String?
+  timezone  String   @default("America/Montevideo")
+  settings  Json     @default("{}")
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@map("branches")
+}
+
+model TenantModule {
+  id        String    @id @default(cuid())
+  tenantId  String
+  moduleKey ModuleKey
+  isActive  Boolean   @default(true)
+  config    Json      @default("{}")
+  enabledAt DateTime  @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, moduleKey])
+  @@index([tenantId])
+  @@map("tenant_modules")
+}
